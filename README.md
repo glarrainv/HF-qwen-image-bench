@@ -10,7 +10,7 @@ app_file: app.py
 suggested_hardware: zero-a10g
 pinned: false
 license: apache-2.0
-short_description: Judge a generated image with the Qwen-Image-Bench judge model
+short_description: Judge a generated image with the Qwen-Image-Bench model
 ---
 
 # Qwen-Image-Bench — Q-Judger
