@@ -4,8 +4,11 @@
 # is not available there. transformers is pinned to the version upstream
 # Qwen-Image-Bench tests against, and is the floor for Qwen3.5 architecture
 # support. bitsandbytes >= 0.46.0 is what ZeroGPU needs to skip its legacy
-# quantization shim.
+# quantization shim. torchvision is required by transformers' Qwen3-VL image and
+# video processors (they raise at load time without it) and its releases are
+# tied to a torch version: 0.28.x is the match for torch 2.13.x.
 torch==2.13.0
+torchvision==0.28.0
 transformers==5.8.1
 accelerate>=1.10.0
 bitsandbytes>=0.46.0
