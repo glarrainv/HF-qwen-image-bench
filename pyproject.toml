@@ -1,0 +1,24 @@
+[project]
+name = "qwen-image-bench"
+version = "0.1.0"
+description = "Gradio Space that scores generated images with the Qwen-Image-Bench judge model"
+readme = "README.md"
+authors = [
+    { name = "Gaspar", email = "glarrain@nd.edu" }
+]
+# Pinned to match the ZeroGPU Space runtime: Python 3.12 and torch 2.13.0 are
+# what ZeroGPU supports. Keep these in sync with requirements.txt.
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "gradio>=6.28.0",
+    "spaces>=0.51.3",
+    "torch==2.13.0",
+    "transformers==5.8.1",
+    "accelerate>=1.10.0",
+    "bitsandbytes>=0.46.0",
+    "pillow>=11.0.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
