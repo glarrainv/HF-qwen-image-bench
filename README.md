@@ -29,17 +29,23 @@ Spearman ρ = 0.92 against human expert rankings overall
 The model grades each level-3 criterion on a three-point scale, then scores are
 averaged up the hierarchy:
 
-| Verdict | Meaning | Mapped score |
+| Verdict | Meaning | Score |
 | --- | --- | --- |
 | 0 | Fail — clear defect | 0 |
-| 1 | Pass — meets baseline | 60 |
-| 2 | Excel — concretely excellent | 100 |
+| 1 | Pass — meets baseline | 1 |
+| 2 | Excel — concretely excellent | 2 |
 | N/A | Criterion doesn't apply | excluded from the average |
 
 Level-3 → level-2 → level-1 → total, each step an arithmetic mean over the
-non-N/A children. The model runs with thinking enabled, so it reasons before
-emitting its JSON verdict; that reasoning is shown in the **Judge reasoning**
-panel.
+non-N/A children.
+
+Scores are reported on this raw **0–2** scale. The paper maps the same verdicts to
+0/60/100, which is *not* a rescale of 0–2 — it is non-linear, so verdicts {1, 2}
+average to 1.5 here and to 80 upstream. The paper-scale equivalent is shown beneath
+the total so the two stay comparable.
+
+The model runs with thinking enabled, so it reasons before emitting its JSON
+verdict; that reasoning is shown in the **Judge reasoning** panel.
 
 ## The prompt is required
 
@@ -63,17 +69,42 @@ Two other deliberate deviations from a full benchmark run:
   per-prompt subset of dimensions from the benchmark metadata. Here every
   selected dimension is scored, so criteria that don't apply to your image come
   back as N/A rather than being skipped up front.
-- **Shorter generations.** The default cap is 1024 new tokens per dimension
-  instead of upstream's 4096. Most verdicts finish well inside that; raise the
-  slider if you see truncated reasoning.
+- **Bounded thinking.** Upstream lets the model think up to 4096 tokens per
+  dimension and stop wherever it stops. Here the budget is split: the model reasons
+  until its allowance runs out, then `</think>` is forced so there is always room
+  left to emit the JSON verdict. Without that, a cutoff lands mid-reasoning and
+  takes the scores with it. Dimensions closed this way are marked in the results.
 
 ## GPU quota
 
-Each dimension is a separate generation, so a full five-dimension run takes a
-couple of minutes of GPU time. ZeroGPU's daily allowance is 5 minutes for free
-accounts and 40 minutes with PRO, which works out to roughly one or two full runs
-per day on a free account. Deselect dimensions or lower the token cap to stretch
-it further.
+All five dimensions are decoded as one padded batch. They share a prompt that
+differs only in the checklist at the end, and at 4-bit the decode loop is bound
+by weight bandwidth rather than arithmetic, so five sequences cost roughly the
+wall-clock of one — which is what ZeroGPU bills.
+
+That changes what saves quota. **Deselecting dimensions barely helps**, since the
+batch runs at the pace of its slowest row. The thinking budget is the lever, so it
+is what the preset control sets:
+
+| Preset | Thinking + answer | Reserves | Prompt cap | Free runs/day |
+| --- | --- | --- | --- | --- |
+| Fast | 768 + 384 | ~91s | 600 chars | ~2 |
+| **Balanced** (default) | 1792 + 384 | ~147s | 1,500 chars | ~1 |
+| Fidelity | 3712 + 384 | ~254s | 3,000 chars | PRO |
+
+Fidelity's total matches upstream's 4096 tokens. The budget is a ceiling rather
+than a bill — rows that finish early release the GPU immediately — but ZeroGPU
+checks admission against the *whole* reservation, so an oversized budget gets a run
+refused rather than merely slowed. Free accounts get about 5 minutes a day, PRO 40.
+
+The prompt is capped per preset because it sits in the prefix of every dimension,
+so each character is prefilled once per batch row. The field stops at the cap and
+the counter says how much is left; nothing is ever silently truncated.
+
+The batch is sized to keep the KV cache inside an 8GB budget, which leaves all five
+dimensions in one batch at every preset. Set `JUDGE_BATCH_SIZE=1` to force one
+generation per dimension — slower, but each dimension's scores land as soon as that
+dimension finishes.
 
 ## Running it yourself
 

@@ -1,14 +1,21 @@
-"""Parsing and 0/60/100 score aggregation for Q-Judger output.
+"""Parsing and score aggregation for Q-Judger output.
 
-Vendored verbatim from https://github.com/QwenLM/Qwen-Image-Bench (score_utils.py),
-Apache-2.0. Keep in sync with upstream: the judge's score calibration depends
-on these strings being byte-identical to what the model was fine-tuned on.
+Vendored from https://github.com/QwenLM/Qwen-Image-Bench (score_utils.py),
+Apache-2.0, byte-identical **except for SCORE_MAP**. Keep the rest in sync with
+upstream: the judge's score calibration depends on these strings being identical to
+what the model was fine-tuned on.
+
+The one deliberate deviation: SCORE_MAP is the identity, so scores stay on the raw
+0-2 verdict scale instead of upstream's 0/60/100. That is not a rescale — 0/60/100
+is non-linear, so verdicts {1, 2} average to 1.5 here and to 80 upstream, and the
+two are not convertible. ``report.paper_scale_total`` recomputes the comparable
+figure for display next to the total.
 """
 
 import json
 import re
 
-SCORE_MAP = {0: 0.0, 1: 60.0, 2: 100.0}
+SCORE_MAP = {0: 0.0, 1: 1.0, 2: 2.0}
 
 
 def extract_json_from_response(response_text):
@@ -35,7 +42,7 @@ def extract_json_from_response(response_text):
 
 
 def map_score(raw_score):
-    """Map raw score to final score: 0→0, 1→60, 2→100, 'N/A'→None."""
+    """Map raw score to final score: 0→0, 1→1, 2→2, 'N/A'→None (see SCORE_MAP above)."""
     if isinstance(raw_score, str) and raw_score.upper() == "N/A":
         return None
     try:
