@@ -1,11 +1,7 @@
 """Gradio Space for Qwen/Qwen-Image-Bench (Q-Judger).
 
-Upload a generated image plus the prompt that produced it, and the judge scores
-it across the benchmark's five level-1 dimensions.
+Simplifies use of the Qwen-Image-Bench judge model taking a single prompt and image and outputting scores.
 
-Only ``run_judge`` runs on the GPU. ZeroGPU bills everything inside that function,
-including work that never touches CUDA, so validation, image preparation, parsing
-and markdown rendering all live in ``judge_and_render`` around it.
 """
 
 import json
@@ -21,7 +17,6 @@ import gradio as gr
 import spaces
 
 from qwen_image_bench.examples import (
-    EXAMPLE_DIMENSION,
     EXAMPLE_JSON,
     EXAMPLE_OUTPUT,
     EXAMPLE_PROMPT,
@@ -38,7 +33,6 @@ from qwen_image_bench.judge import (
 from qwen_image_bench.recovery import parse_answer, split_thinking
 from qwen_image_bench.report import (
     DIMENSIONS,
-    MAX_SCORE,
     detail_rows,
     format_summary,
 )
@@ -64,6 +58,21 @@ MAX_RESERVATION_SECONDS = 260
 # How much partial reasoning to show for a dimension that is still decoding.
 LIVE_TRACE_TAIL = 1200
 
+CITATION = """\
+**Citation:** [Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation](https://arxiv.org/abs/2605.28091)
+```bibtex
+@misc{li2026qwenimagebenchgenerationcreationtexttoimage,
+      title={Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation},
+      author={Niantong Li and Guangzheng Hu and Weixu Qiao and Ying Ba and others},
+      year={2026},
+      eprint={2605.28091},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2605.28091},
+}
+```
+"""
+
 
 def estimate_duration(image, prompt, dimensions, preset_name, *args, **kwargs):
     """Reserve GPU time for the batches we are actually going to run.
@@ -83,16 +92,6 @@ def estimate_duration(image, prompt, dimensions, preset_name, *args, **kwargs):
     return int(min(BASE_SECONDS + batches * per_batch, MAX_RESERVATION_SECONDS))
 
 
-def _reservation_note(preset_name, prompt="", dimensions=None):
-    seconds = estimate_duration(None, prompt, dimensions or DIMENSIONS, preset_name)
-    worst = int(seconds * DURATION_FACTOR_WORST_CASE)
-    preset = PRESETS[preset_name]
-    return (
-        f"Reserves **~{seconds}s** of GPU quota (up to ~{worst}s on slower nodes). "
-        f"Budget: {preset.think} thinking + {preset.answer} answer tokens per dimension."
-    )
-
-
 def _prompt_status(prompt, preset_name):
     """Character counter text, and whether the prompt is over its cap."""
     cap = PRESETS[preset_name].prompt_chars
@@ -100,8 +99,8 @@ def _prompt_status(prompt, preset_name):
     over = used > cap
     if over:
         return (
-            f"**{used} / {cap} characters — {used - cap} over the {preset_name} limit.** "
-            "Shorten the prompt, or choose a preset with more room.",
+            f"**{used} / {cap} characters. You are {used - cap} characters over the {preset_name} thinking budget limit.** "
+            "Shorten the prompt, or select a higher thinking budget.",
             True,
         )
     return f"{used} / {cap} characters (~{int(used / CHARS_PER_TOKEN)} tokens)", False
@@ -149,8 +148,7 @@ def judge_and_render(image, prompt, dimensions, preset_name):
         raise gr.Error("Upload an image to judge.")
     if not prompt:
         raise gr.Error(
-            "Enter the text prompt that generated this image — the judge scores "
-            "the image against it, and Alignment is meaningless without it."
+            "Please provide the prompt used to generate this image."
         )
     if not dimensions:
         raise gr.Error("Select at least one evaluation dimension.")
@@ -161,8 +159,7 @@ def judge_and_render(image, prompt, dimensions, preset_name):
     if len(prompt) > cap:
         raise gr.Error(
             f"Prompt is {len(prompt)} characters; the {preset_name} preset allows "
-            f"{cap}. Shorten it or switch preset — the prompt is prefilled once per "
-            "dimension, so its length is paid for five times over."
+            f"{cap}. Shorten it or switch preset."
         )
 
     # Judge in the benchmark's canonical order, not checkbox click order.
@@ -203,53 +200,57 @@ def judge_and_render(image, prompt, dimensions, preset_name):
 
 _example_thinking, _example_answer = split_thinking(EXAMPLE_OUTPUT)
 EXAMPLE_WALKTHROUGH = f"""\
-**1 · The prompt you supply**
+**1. Prompt**
 
 > {EXAMPLE_PROMPT}
 
-**2 · What the judge sends itself** — your prompt, the image, and {EXAMPLE_DIMENSION}'s
-full 20-criterion checklist. It reasons first ({len(_example_thinking)} characters here),
-then answers:
+**2. Judge's reasoning**
 
 ```
+<think>
 {_example_thinking[:600]}…
 </think>
 ```
 
-**3 · The JSON it must end with** — every criterion in the checklist, scored 0, 1 or 2,
-or `"N/A"` where the criterion doesn't apply:
+**3. End JSON with scores across dimensions**
 
 ```json
-{json.dumps(EXAMPLE_JSON, indent=2)[:700]}…
+{json.dumps(EXAMPLE_JSON, indent=2)[:300]}…
 ```
-
-**4 · The score** — six criteria applied, fourteen N/A. Level-3 averages up to
-level-2, level-2 up to level-1: **1.33 / {MAX_SCORE}**. N/A criteria leave the mean
-entirely; they are not zeros.
 """
 
+CITATION = f"""
+Citation
+If you find this model useful, please cite our paper:
+
+@misc{li2026qwenimagebenchgenerationcreationtexttoimage,
+      title={Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation}, 
+      author={Niantong Li and Guangzheng Hu and Weixu Qiao and Ying Ba and Qichen Hong and Shijun Shen and Jinlin Wang and Fan Zhou and Jianye Kang and Xin Shang and Ziyi He and Wei Wang and Dalin Li and Jiahao Li and Jie Zhang and Kaiyuan Gao and Kun Yan and Lihan Jiang and Ningyuan Tang and Shengming Yin and Tianhe Wu and Xiao Xu and Xiaoyue Chen and Yuxiang Chen and Yan Shu and Yanran Zhang and Yilei Chen and Yixian Xu and Zekai Zhang and Zhendong Wang and Zihao Liu and Zikai Zhou and Hongzhu Shi and Yi Wang and Bing Zhao and Hu Wei and Lin Qu and Chenfei Wu},
+      year={2026},
+      eprint={2605.28091},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2605.28091}, 
+}
+
+License
+This project is licensed under the Apache License 2.0.
+"""
 
 with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
     gr.Markdown(
         f"""
-        # Qwen-Image-Bench — Q-Judger
+        # Qwen-Image-Bench — Q-Judger Space
 
-        Scores a text-to-image generation across the benchmark's five dimensions
-        using [Qwen/Qwen-Image-Bench](https://huggingface.co/Qwen/Qwen-Image-Bench),
-        a 27B judge model fine-tuned from Qwen3.6-27B.
+        Scores text-to-image output across the benchmark's five dimensions
+        using [Qwen/Qwen-Image-Bench](https://huggingface.co/Qwen/Qwen-Image-Bench).
 
-        Each criterion is graded **0 (Fail) · 1 (Pass) · 2 (Excel)** or N/A, then
-        averaged up the level-3 → level-2 → level-1 hierarchy. Scores are reported on
-        that raw **0–{MAX_SCORE}** scale, with the paper's 0/60/100 equivalent shown
-        alongside the total.
-
-        > Running on ZeroGPU in 4-bit NF4 so the model fits a 48GB slice. Scores
-        > will track the paper's closely but not reproduce them exactly — use a
-        > bf16 GPU if you need reference numbers.
+        Each criterion is graded **0 (Fail), 1 (Pass), 2 (Excel)** or N/A. Scores are reported alongside the paper's 0/60/100 equivalent.
+        4 bit quantization is implemented to accomodate for ZeroGPU.
         """
     )
 
-    with gr.Accordion("See a worked example (no GPU used)", open=False):
+    with gr.Accordion("Example output", open=False):
         gr.Markdown(EXAMPLE_WALKTHROUGH)
 
     with gr.Row():
@@ -261,22 +262,25 @@ with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
                 lines=3,
                 max_length=PRESETS[DEFAULT_PRESET].prompt_chars,
             )
-            prompt_counter = gr.Markdown(_prompt_status("", DEFAULT_PRESET)[0])
-            gr.Examples(examples=[[EXAMPLE_PROMPT]], inputs=[prompt_input], label="Example prompt")
+
+            prompt_counter = gr.Markdown(
+                _prompt_status(EXAMPLE_PROMPT, DEFAULT_PRESET)[0],
+                label="Character count"
+            )
+
 
             dimension_input = gr.CheckboxGroup(
                 choices=DIMENSIONS,
                 value=DIMENSIONS,
                 label="Evaluation dimensions",
-                info="All selected dimensions are judged in one batch, so dropping one saves little GPU quota.",
+                info="Select dimensions present in JSON output.",
             )
             preset_input = gr.Radio(
                 choices=list(PRESETS),
                 value=DEFAULT_PRESET,
                 label="Thinking budget",
-                info="Fast is cheapest and caps the prompt hardest; Fidelity matches upstream's 4096 tokens.",
+                info="Fast is recommended for HuggingFace free plan. On the other hand, Fidelity matches upstream's 4096 tokens.",
             )
-            reservation_note = gr.Markdown(_reservation_note(DEFAULT_PRESET))
             run_button = gr.Button("Judge image", variant="primary")
 
         with gr.Column(scale=3):
@@ -290,13 +294,14 @@ with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
                 json_output = gr.JSON()
             with gr.Accordion("Judge reasoning", open=False):
                 thinking_output = gr.Markdown()
+            with gr.Accordion("Citation", open=False):
+                gr.Markdown(CITATION, elem_id="citation")
 
     def on_prompt_change(prompt, preset_name, dimensions):
         text, over = _prompt_status(prompt, preset_name)
         return (
             gr.update(value=text),
-            gr.update(interactive=not over),
-            gr.update(value=_reservation_note(preset_name, prompt, dimensions)),
+            gr.update(interactive=not over)
         )
 
     def on_preset_change(prompt, preset_name, dimensions):
@@ -304,28 +309,21 @@ with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
         return (
             gr.update(max_length=PRESETS[preset_name].prompt_chars),
             gr.update(value=text),
-            gr.update(interactive=not over),
-            gr.update(value=_reservation_note(preset_name, prompt, dimensions)),
+            gr.update(interactive=not over)
         )
 
     prompt_input.change(
         fn=on_prompt_change,
         inputs=[prompt_input, preset_input, dimension_input],
-        outputs=[prompt_counter, run_button, reservation_note],
+        outputs=[prompt_counter, run_button],
     )
+
     # A shorter cap must never silently truncate what someone already typed: the
     # counter says what is wrong and the button locks until they fix it.
     preset_input.change(
         fn=on_preset_change,
         inputs=[prompt_input, preset_input, dimension_input],
-        outputs=[prompt_input, prompt_counter, run_button, reservation_note],
-    )
-    dimension_input.change(
-        fn=lambda prompt, preset_name, dimensions: gr.update(
-            value=_reservation_note(preset_name, prompt, dimensions)
-        ),
-        inputs=[prompt_input, preset_input, dimension_input],
-        outputs=[reservation_note],
+        outputs=[prompt_input, prompt_counter, run_button],
     )
 
     run_button.click(
