@@ -103,11 +103,8 @@ _processor = None
 
 
 def load_judge():
-    """Load the judge model onto CUDA. Call this at module level.
-
-    ZeroGPU requires models to be placed on cuda during startup (a CUDA
-    emulation layer stands in for the real device outside @spaces.GPU), so
-    calling this lazily from inside a GPU function would be much slower.
+    """
+    Load quantizised judge model onto CUDA. Force nf4.
     """
     global _model, _processor
     if _model is not None:
@@ -213,16 +210,8 @@ def batch_size_for(model, max_new_tokens, requested):
 
 
 class ForceThinkClose(LogitsProcessor):
-    """Close the thinking block once a row has spent its budget.
-
-    Thinking is the only unbounded part of the response, and a cutoff lands *inside*
-    it -- destroying the JSON that follows and costing the whole dimension. Rather
-    than letting max_new_tokens decide where the axe falls, this spends the budget on
-    reasoning and then forces ``</think>``, so every row still gets to answer.
-
-    Per-row: rows that closed thinking on their own are untouched, and rows that have
-    already finished are immune because generate substitutes pad tokens *after* token
-    selection. Construct a fresh instance per generate() call.
+    """
+    Forces </think> close once selected thinking budget is exhausted.
     """
 
     def __init__(self, prompt_length, think_budget, think_end_id):
