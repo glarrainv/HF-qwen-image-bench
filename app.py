@@ -220,19 +220,19 @@ EXAMPLE_WALKTHROUGH = f"""\
 """
 
 CITATION = f"""
-Citation
-If you find this model useful, please cite our paper:
+Citation\n
+If you find this model useful, please cite our paper:\n
 
-@misc{{li2026qwenimagebenchgenerationcreationtexttoimage,
-      title={{Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation}}, 
-      author={{Niantong Li and Guangzheng Hu and Weixu Qiao and Ying Ba and Qichen Hong and Shijun Shen and Jinlin Wang and Fan Zhou and Jianye Kang and Xin Shang and Ziyi He and Wei Wang and Dalin Li and Jiahao Li and Jie Zhang and Kaiyuan Gao and Kun Yan and Lihan Jiang and Ningyuan Tang and Shengming Yin and Tianhe Wu and Xiao Xu and Xiaoyue Chen and Yuxiang Chen and Yan Shu and Yanran Zhang and Yilei Chen and Yixian Xu and Zekai Zhang and Zhendong Wang and Zihao Liu and Zikai Zhou and Hongzhu Shi and Yi Wang and Bing Zhao and Hu Wei and Lin Qu and Chenfei Wu}},
-      year={{2026}},
-      eprint={{2605.28091}},
-      archivePrefix={{arXiv}},
-      primaryClass={{cs.CV}},
-      url={{https://arxiv.org/abs/2605.28091}}, 
-}}
-License
+@misc{{li2026qwenimagebenchgenerationcreationtexttoimage,\n
+      title={{Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation}},\n 
+      author={{Niantong Li and Guangzheng Hu and Weixu Qiao and Ying Ba and Qichen Hong and Shijun Shen and Jinlin Wang and Fan Zhou and Jianye Kang and Xin Shang and Ziyi He and Wei Wang and Dalin Li and Jiahao Li and Jie Zhang and Kaiyuan Gao and Kun Yan and Lihan Jiang and Ningyuan Tang and Shengming Yin and Tianhe Wu and Xiao Xu and Xiaoyue Chen and Yuxiang Chen and Yan Shu and Yanran Zhang and Yilei Chen and Yixian Xu and Zekai Zhang and Zhendong Wang and Zihao Liu and Zikai Zhou and Hongzhu Shi and Yi Wang and Bing Zhao and Hu Wei and Lin Qu and Chenfei Wu}},\n
+      year={{2026}},\n
+      eprint={{2605.28091}},\n
+      archivePrefix={{arXiv}},\n
+      primaryClass={{cs.CV}},\n
+      url={{https://arxiv.org/abs/2605.28091}}, \n
+}}\n
+License\n
 This project is licensed under the Apache License 2.0.
 """
 
