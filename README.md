@@ -13,78 +13,41 @@ license: apache-2.0
 short_description: Judge a generated image with the Qwen-Image-Bench model
 ---
 
-# Qwen-Image-Bench — Q-Judger
 
-Upload a text-to-image generation together with the prompt that produced it, and
-[Q-Judger](https://huggingface.co/Qwen/Qwen-Image-Bench) scores it across the
-benchmark's five level-1 dimensions: **Quality**, **Aesthetics**, **Alignment**,
-**Real-world Fidelity**, and **Creative Generation**.
+<h1> HF Space for Qwen-Image-Bench — Q-Judger</h1>
+<div><img alt="Qwen" src="https://img.shields.io/badge/Qwen-6950EF?style=flat&logo=qwen&logoColor=white"/> <img alt="Transformers" src="https://img.shields.io/badge/HuggingFace-%23FFD21E.svg?style=flat&logo=huggingface&logoColor=white"/> <img alt="Pytorch" src="https://img.shields.io/badge/PyTorch-EE4C2C.svg?style=flat&logo=pytorch&logoColor=white"/> </div>
 
-Q-Judger is a 27B vision-language judge fine-tuned from Qwen3.6-27B. It reports
-Spearman ρ = 0.92 against human expert rankings overall
-([paper](https://arxiv.org/abs/2605.28091)).
+<p><i><a href="https://glarr-qwen-image-bench-classification.hf.space/">Hugging Face Space</a></i></p>
+
+---
+
+Q-Judger is a 27B vision-language judge fine-tuned from Qwen3.6-27B to score TTI output across five different dimensions.
+This model is part of Qwen's larger Qwen-Image-Bench collection which they explored in [their paper](https://arxiv.org/abs/2605.28091).
 
 ## How scoring works
 
-The model grades each level-3 criterion on a three-point scale, then scores are
-averaged up the hierarchy:
+The model grades each level-3 criterion on a three-point scale.
 
-| Verdict | Meaning | Score |
-| --- | --- | --- |
-| 0 | Fail — clear defect | 0 |
-| 1 | Pass — meets baseline | 1 |
-| 2 | Excel — concretely excellent | 2 |
-| N/A | Criterion doesn't apply | excluded from the average |
+| Score | Meaning |
+| --- | --- | 
+| 0 | Fail | 
+| 1 | Pass | 
+| 2 | Excel| 
+| N/A | Criterion doesn't apply |
 
-Level-3 → level-2 → level-1 → total, each step an arithmetic mean over the
-non-N/A children.
 
-Scores are reported on this raw **0–2** scale. The paper maps the same verdicts to
-0/60/100, which is *not* a rescale of 0–2 — it is non-linear, so verdicts {1, 2}
-average to 1.5 here and to 80 upstream. The paper-scale equivalent is shown beneath
-the total so the two stay comparable.
+Raw scores are reported as a .json on this **0–2** scale. This space does not normalize scores to the 0, 60, 100 scale presented in the paper yet.
 
-The model runs with thinking enabled, so it reasons before emitting its JSON
-verdict; that reasoning is shown in the **Judge reasoning** panel.
+## Quantization Note
 
-## The prompt is required
-
-The judge scores the image *against the prompt that generated it*. Alignment and
-Creative Generation compare what was asked for to what was produced, so without a
-prompt those dimensions are meaningless. If you don't have the original prompt,
-deselect those dimensions and read only Quality and Aesthetics.
-
-## Accuracy caveat
-
-This Space runs the model in **4-bit NF4** so it fits ZeroGPU's 48GB slice — the
-full bf16 weights are ~55GB. The vision tower and output head stay in bf16, so
-image understanding is unaffected, but quantizing the language model can shift
-verdicts near a decision boundary. Scores track the paper's closely; they are not
-bit-exact reproductions. For reference numbers, run the
-[upstream pipeline](https://github.com/QwenLM/Qwen-Image-Bench) in bf16.
+This Space runs the model in **4-bit NF4** to ensure compatibility with HF's ZeroGPU's 48GB. This change alters precision making results not directly comparable to those presented by Qwen's research. For full performance, running the [the official](https://github.com/QwenLM/Qwen-Image-Bench) is highly recommended to ensure accuracy.
 
 Two other deliberate deviations from a full benchmark run:
 
-- **Free-form images, not benchmark IDs.** The official harness looks up a
-  per-prompt subset of dimensions from the benchmark metadata. Here every
-  selected dimension is scored, so criteria that don't apply to your image come
-  back as N/A rather than being skipped up front.
-- **Bounded thinking.** Upstream lets the model think up to 4096 tokens per
-  dimension and stop wherever it stops. Here the budget is split: the model reasons
-  until its allowance runs out, then `</think>` is forced so there is always room
-  left to emit the JSON verdict. Without that, a cutoff lands mid-reasoning and
-  takes the scores with it. Dimensions closed this way are marked in the results.
+- **Max Tokens/Chars.** Thinking budgets options are provided with respective token/char cutoffs. Instead of max_tokens, </thinking> is forced into reasoning once condition is reached.
+- **Dimension Selection:** Space provides the option to cutoff dimensions that are not needed for the user's goals. 
 
 ## GPU quota
-
-All five dimensions are decoded as one padded batch. They share a prompt that
-differs only in the checklist at the end, and at 4-bit the decode loop is bound
-by weight bandwidth rather than arithmetic, so five sequences cost roughly the
-wall-clock of one — which is what ZeroGPU bills.
-
-That changes what saves quota. **Deselecting dimensions barely helps**, since the
-batch runs at the pace of its slowest row. The thinking budget is the lever, so it
-is what the preset control sets:
 
 | Preset | Thinking + answer | Reserves | Prompt cap | Free runs/day |
 | --- | --- | --- | --- | --- |
@@ -92,10 +55,7 @@ is what the preset control sets:
 | **Balanced** (default) | 1792 + 384 | ~147s | 1,500 chars | ~1 |
 | Fidelity | 3712 + 384 | ~254s | 3,000 chars | PRO |
 
-Fidelity's total matches upstream's 4096 tokens. The budget is a ceiling rather
-than a bill — rows that finish early release the GPU immediately — but ZeroGPU
-checks admission against the *whole* reservation, so an oversized budget gets a run
-refused rather than merely slowed. Free accounts get about 5 minutes a day, PRO 40.
+Fidelity's total matches upstream's 4096 tokens. 
 
 The prompt is capped per preset because it sits in the prefix of every dimension,
 so each character is prefilled once per batch row. The field stops at the cap and
@@ -118,11 +78,8 @@ Needs a CUDA GPU with ~20GB free for the 4-bit weights. The first run downloads
 
 ## Credits
 
-Model, checklists, and scoring methodology by the Qwen team, Apache-2.0.
-`src/qwen_image_bench/checklists.py` and `scoring.py` are vendored from
-[QwenLM/Qwen-Image-Bench](https://github.com/QwenLM/Qwen-Image-Bench); the
-checklist strings must stay byte-identical to upstream for the scores to mean
-what the paper says they mean.
+This space is an adaptation of:
+[QwenLM/Qwen-Image-Bench](https://github.com/QwenLM/Qwen-Image-Bench)
 
 ```bibtex
 @misc{li2026qwenimagebenchgenerationcreationtexttoimage,
