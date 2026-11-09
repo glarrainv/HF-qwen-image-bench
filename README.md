@@ -8,25 +8,74 @@ sdk_version: 6.28.0
 python_version: '3.12'
 app_file: app.py
 suggested_hardware: zero-a10g
-pinned: false
+pinned: true
 license: apache-2.0
 short_description: Judge a generated image with the Qwen-Image-Bench model
+models: [Qwen/Qwen3.6-27B]
+library_name: transformers
+tags:
+  - judge-model
+  - text-to-image
+  - evaluation
+  - benchmark
+  - qwen
 ---
 
 
-<h1> HF Space for Qwen-Image-Bench — Q-Judger</h1>
-<div><img alt="Qwen" src="https://img.shields.io/badge/Qwen-6950EF?style=flat&logo=qwen&logoColor=white"/> <img alt="Transformers" src="https://img.shields.io/badge/HuggingFace-%23FFD21E.svg?style=flat&logo=huggingface&logoColor=white"/> <img alt="Pytorch" src="https://img.shields.io/badge/PyTorch-EE4C2C.svg?style=flat&logo=pytorch&logoColor=white"/> </div>
+<div align="center">
+      
+<br>
+<br>
 
-<p><i><a href="https://glarr-qwen-image-bench-classification.hf.space/">Hugging Face Space</a></i></p>
+<h1> HF Space for Qwen-Image-Bench</h1>
+<div>
+<a href="https://huggingface.co/spaces/glarr/qwen-image-bench-classification"><img src="https://img.shields.io/badge/-Gradio-f97316?style=flat&logo=gradio&logoColor=white" alt="Space"></a>
+<img alt="Qwen" src="https://img.shields.io/badge/Qwen-6950EF?style=flat&logo=qwen&logoColor=white"/>
+<img alt="Pytorch" src="https://img.shields.io/badge/PyTorch-EE4C2C.svg?style=flat&logo=pytorch&logoColor=white"/> 
+</div>
+<div>
+<a href="https://huggingface.co/Qwen/Qwen-Image-Bench"><img src="https://img.shields.io/badge/Judge_Model-HuggingFace-ffd21e?logo=huggingface" alt="Model"></a>
+<a href="http://arxiv.org/abs/2605.28091"><img src="https://img.shields.io/badge/Paper-arXiv-b31b1b?logo=arxiv" alt="Paper"></a>
+</div>
 
----
+<br>
+<br>
+
+</div>
+
 
 Q-Judger is a 27B vision-language judge fine-tuned from Qwen3.6-27B to score TTI output across five different dimensions.
 This model is part of Qwen's larger Qwen-Image-Bench collection which they explored in [their paper](https://arxiv.org/abs/2605.28091).
 
-## How scoring works
+## Dimensions
 
-The model grades each level-3 criterion on a three-point scale.
+#### Quality:
+| Realism | Detail | Resolution |
+|-------- | ------ | ---------- |
+
+#### Aesthetics:
+| Composition | Color Harmony |  Lighting | Anatomical Portraiture | Emotional Expression | Style Control |
+| -------- | ------ | ---------- | ---------- | ---------- | ---------- |
+
+#### Alignment:
+| Attributes | Actions |  Layout | Relations | Scene | 
+| -------- | ------ | ---------- | ---------- | ---------- |
+
+#### Real-world Fidelity:
+| Fairness | Safety & Compliance |  World Knowledge |
+| -------- | ------ | ---------- | 
+
+#### Creative Generation:
+
+| Imagination | Feature Matchin |  Logical Resolutione | Text Rendering | Design Applications | Visual Storytelling |
+| -------- | ------ | ---------- | ---------- | ---------- | ---------- | 
+
+
+
+
+## Scoring
+
+The model grades each criterion on a three-point scale.
 
 | Score | Meaning |
 | --- | --- | 
