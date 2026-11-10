@@ -9,7 +9,7 @@
 # tied to a torch version: 0.28.x is the match for torch 2.13.x.
 torch==2.13.0
 torchvision==0.28.0
-transformers==5.8.1
+transformers==5.10.1
 accelerate>=1.10.0
 bitsandbytes>=0.46.0
 Pillow>=11.0.0
