@@ -1,23 +1,8 @@
-"""Loading and running the Q-Judger model (Qwen/Qwen-Image-Bench).
-
-The model is 27.4B params, ~55GB in bf16, which does not fit ZeroGPU's default
-48GB slice. We quantize the language model to 4-bit NF4 (~18GB) but keep the
-vision tower and lm_head in bf16 -- the vision tower is only ~0.4B params, so
-leaving it unquantized costs little memory and preserves image fidelity, which
-is what the judge is actually looking at.
-
-The five level-1 dimensions are decoded as one padded batch rather than one
-generation each. At 4-bit the decode loop is bound by weight bandwidth, not
-arithmetic: pulling 18GB of weights through the cache to produce one token costs
-almost exactly what it costs to produce five. ZeroGPU bills wall-clock, so a
-full five-dimension run drops from five sequential decodes to one.
-
-Thinking is the only unbounded part of a response and the JSON verdict comes
-after it, so a plain max_new_tokens cutoff lands mid-reasoning and destroys the
-answer. Instead the budget is split: ``</think>`` is forced once a row has spent
-its thinking allowance, leaving a reserved window for the JSON. Worst-case decode
-is then deterministic, which is what lets the GPU reservation be tight enough for
-ZeroGPU to admit it on free quota.
+"""
+Load Q-Judger Model using 4-bit NF4 quantizations.
+Handles processing of image and prompt input, passing it to the model.
+Handles batch size, thinking budget, and streaming partial output.
+ 
 """
 
 import os
@@ -40,62 +25,54 @@ from transformers import (
 from transformers.generation.streamers import BaseStreamer
 
 from .checklists import DIM_TO_CHECKLIST, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
-from .recovery import THINK_END, split_thinking
 
 MODEL_ID = "Qwen/Qwen-Image-Bench"
+THINK_END = "</think>"
 
-# Fixed by the reference implementation for reproducibility. temperature=0 /
-# top_k=1 is greedy decoding, which transformers expresses as do_sample=False.
 SEED = 42
 REPETITION_PENALTY = 1.05
 
-# Memory we are willing to spend on KV cache for a batch. The 4-bit weights take
-# ~18GB of the 48GB slice and the bf16 vision tower spikes during prefill, so 8GB
-# is comfortable headroom rather than a limit worth tuning.
+# The reference run's --max_new_tokens. A preset with think=None decodes this
+# budget with no forced </think>, matching the reference run's decoding settings:
+# a row that runs out is truncated and fails to parse, exactly as it did there.
+REFERENCE_MAX_NEW_TOKENS = 4096
+
 KV_CACHE_BUDGET_BYTES = 8 * 1024**3
-
-# Prompt length is dominated by the image: ~1.4k vision tokens at 1024x1024,
-# plus the system prompt and the longest checklist.
-PREFILL_TOKEN_ESTIMATE = 2048
-
-# Rough conversion for sizing only -- English prose plus markdown runs a little
-# under four characters a token. Used to price the user's prompt, never to cut it.
+PREFILL_TOKEN_ESTIMATE = 3072
 CHARS_PER_TOKEN = 3.8
 
 
 class Preset(NamedTuple):
-    """A GPU budget, and the prompt length that budget can afford.
+    """Pre-built GPU budgets adjusted for HF Space.
 
-    ``think`` bounds the reasoning, ``answer`` is reserved for the JSON that follows
-    it -- Creative Generation's 20 criteria need ~340 tokens, so 384 has headroom.
-    Total decode is ``think + 1 + answer``; the 1 is the forced ``</think>``.
-
-    ``prompt_chars`` matters because the prompt sits in the prefix of *every*
-    dimension, so each character is prefilled once per batch row.
+    ``think`` limits reasoning. None never forces ``</think>`` and decodes
+    REFERENCE_MAX_NEW_TOKENS, as the reference run did.
+    ``answer`` limits JSON output. Ignored when ``think`` is None.
+    ``prompt_chars`` Limits user prompt appended in each dimension.
     """
 
-    think: int
+    think: int | None
     answer: int
     prompt_chars: int
 
     @property
     def total_tokens(self):
+        if self.think is None:
+            return REFERENCE_MAX_NEW_TOKENS
         return self.think + 1 + self.answer
 
 
 PRESETS = {
     "Fast": Preset(think=768, answer=384, prompt_chars=600),
     "Balanced": Preset(think=1792, answer=384, prompt_chars=1500),
-    "Fidelity": Preset(think=3712, answer=384, prompt_chars=3000),
+    "Fidelity": Preset(think=None, answer=0, prompt_chars=3000),
 }
+
 DEFAULT_PRESET = "Balanced"
 
-# Set JUDGE_BATCH_SIZE=1 to get one generation per dimension back (slower, but
-# it makes a dimension's scores land as soon as that dimension finishes).
 BATCH_SIZE_OVERRIDE = int(os.environ.get("JUDGE_BATCH_SIZE", "0"))
 
-# Decoding steps between partial-output updates. Decoding is ~20 tok/s, so this
-# refreshes the UI roughly once a second.
+
 STREAM_EVERY_N_STEPS = 24
 
 _model = None
@@ -115,7 +92,6 @@ def load_judge():
         bnb_4bit_quant_type="nf4",
         bnb_4bit_use_double_quant=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
-        # Keep the vision encoder and output head in bf16.
         llm_int8_skip_modules=["lm_head", "visual"],
     )
 
@@ -128,17 +104,10 @@ def load_judge():
     )
     _model.eval()
 
-    # The published checkpoint has use_cache=False baked into its config, which
-    # is fine for training but would force a full recompute of every prefix
-    # token at each decoding step. These are long thinking generations, so turn
-    # the KV cache back on.
     _model.config.use_cache = True
     if hasattr(_model.config, "text_config"):
         _model.config.text_config.use_cache = True
     _model.generation_config.use_cache = True
-
-    # Batched generation needs left padding: right padding would leave pad
-    # tokens between the prompt and the first generated token.
     _processor.tokenizer.padding_side = "left"
     if _model.generation_config.pad_token_id is None:
         _model.generation_config.pad_token_id = _processor.tokenizer.pad_token_id
@@ -187,9 +156,18 @@ def build_messages(prompt, image, dimension):
 
 
 def _kv_bytes_per_token(model):
-    """KV cache cost of one token across every layer, in bytes."""
+    """KV cache cost of one token across the layers that keep one, in bytes.
+
+    The judge is a hybrid: only ``full_attention`` layers (16 of 64) grow a KV
+    cache, while linear-attention layers hold a fixed-size state. Counting every
+    layer would overstate the cost 4x.
+    """
     config = getattr(model.config, "text_config", model.config)
-    layers = config.num_hidden_layers
+    layer_types = getattr(config, "layer_types", None)
+    if layer_types:
+        layers = sum(kind == "full_attention" for kind in layer_types)
+    else:
+        layers = config.num_hidden_layers
     heads = getattr(config, "num_key_value_heads", None) or config.num_attention_heads
     head_dim = getattr(config, "head_dim", None) or (
         config.hidden_size // config.num_attention_heads
@@ -342,11 +320,17 @@ def _stop_token_ids(model, processor):
 
 
 def _encode(processor, image, prompt, dimensions, device):
-    """Tokenize one conversation per dimension into a single left-padded batch."""
+    """Tokenize one conversation per dimension into a single left-padded batch.
+
+    ``enable_thinking`` is explicit because the reference run passed
+    ``--enable_thinking true``; relying on the template default would let a template
+    change silently drop thinking.
+    """
     conversations = [build_messages(prompt, image, dimension) for dimension in dimensions]
     inputs = processor.apply_chat_template(
         conversations,
         add_generation_prompt=True,
+        enable_thinking=True,
         tokenize=True,
         return_dict=True,
         return_tensors="pt",
@@ -370,6 +354,18 @@ def think_end_id(processor):
     return token
 
 
+def split_thinking(text):
+    """Split decoded output into (reasoning, answer) at the last ``</think>``.
+
+    The generation prompt ends with an open ``<think>``, so the output only ever
+    contains the closing tag. No tag means no reasoning was emitted.
+    """
+    end = text.rfind(THINK_END)
+    if end == -1:
+        return "", text.strip()
+    return text[:end].strip(), text[end + len(THINK_END) :].strip()
+
+
 def _judge_chunk(model, processor, image, prompt, dimensions, preset):
     """Decode one batch of dimensions, yielding ("live", texts) then ("done", results).
 
@@ -383,7 +379,8 @@ def _judge_chunk(model, processor, image, prompt, dimensions, preset):
     close_id = think_end_id(processor)
 
     # Fresh per call: both carry per-row state that would be stale on reuse.
-    forcer = ForceThinkClose(prompt_length, preset.think, close_id)
+    # No forcer when think is None, so thinking runs exactly as in the reference run.
+    forcer = None if preset.think is None else ForceThinkClose(prompt_length, preset.think, close_id)
     stopper = StopOnBalancedJson(processor.tokenizer, prompt_length, close_id, len(dimensions))
 
     token_queue = queue.Queue()
@@ -398,7 +395,7 @@ def _judge_chunk(model, processor, image, prompt, dimensions, preset):
                 do_sample=False,
                 repetition_penalty=REPETITION_PENALTY,
                 use_cache=True,
-                logits_processor=LogitsProcessorList([forcer]),
+                logits_processor=LogitsProcessorList([forcer] if forcer else []),
                 stopping_criteria=StoppingCriteriaList([stopper]),
                 streamer=_BatchStreamer(token_queue),
             )
@@ -441,7 +438,7 @@ def _judge_chunk(model, processor, image, prompt, dimensions, preset):
         raise outcome["error"]
 
     output = outcome["output"]
-    forced = forcer.forced_rows()
+    forced = forcer.forced_rows() if forcer else []
     results = {}
     for index, dimension in enumerate(dimensions):
         text = processor.decode(output[index, prompt_length:], skip_special_tokens=True)

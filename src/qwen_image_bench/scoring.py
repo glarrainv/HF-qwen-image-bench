@@ -1,21 +1,10 @@
-"""Parsing and score aggregation for Q-Judger output.
-
-Vendored from https://github.com/QwenLM/Qwen-Image-Bench (score_utils.py),
-Apache-2.0, byte-identical **except for SCORE_MAP**. Keep the rest in sync with
-upstream: the judge's score calibration depends on these strings being identical to
-what the model was fine-tuned on.
-
-The one deliberate deviation: SCORE_MAP is the identity, so scores stay on the raw
-0-2 verdict scale instead of upstream's 0/60/100. That is not a rescale — 0/60/100
-is non-linear, so verdicts {1, 2} average to 1.5 here and to 80 upstream, and the
-two are not convertible. ``report.paper_scale_total`` recomputes the comparable
-figure for display next to the total.
-"""
-
 import json
 import re
 
+from .checklists import L3_TO_L2
+
 SCORE_MAP = {0: 0.0, 1: 1.0, 2: 2.0}
+PAPER_SCALE = {0: 0.0, 1: 60.0, 2: 100.0}
 
 
 def extract_json_from_response(response_text):
@@ -42,7 +31,7 @@ def extract_json_from_response(response_text):
 
 
 def map_score(raw_score):
-    """Map raw score to final score: 0→0, 1→1, 2→2, 'N/A'→None (see SCORE_MAP above)."""
+    """Map raw score to final score: 0→0, 1→1, 2→2, 'N/A'→None."""
     if isinstance(raw_score, str) and raw_score.upper() == "N/A":
         return None
     try:
@@ -51,7 +40,7 @@ def map_score(raw_score):
         return None
 
 
-def _mean_non_none(values):
+def mean_non_none(values):
     valid = [v for v in values if v is not None]
     return sum(valid) / len(valid) if valid else None
 
@@ -81,9 +70,9 @@ def compute_dimension_score(score_json):
             if mapped is not None:
                 level3_mapped.append(mapped)
 
-        level2_scores[level2_name] = _mean_non_none(level3_mapped)
+        level2_scores[level2_name] = mean_non_none(level3_mapped)
 
-    level1_score = _mean_non_none(list(level2_scores.values()))
+    level1_score = mean_non_none(list(level2_scores.values()))
 
     return {
         "level1_score": level1_score,
@@ -91,54 +80,6 @@ def compute_dimension_score(score_json):
         "level3_scores": level3_scores,
     }
 
-
-CHECKLIST_L3_TO_L2 = {
-    "Quality": {
-        "Physical Logic": "Realism", "Material Texture": "Realism",
-        "Noise": "Detail", "Edge Clarity": "Detail", "Naturalness": "Detail",
-        "Resolution": "Resolution",
-    },
-    "Aesthetics": {
-        "Composition": "Composition", "Color Harmony": "Color Harmony",
-        "Lighting & Atmosphere": "Lighting",
-        "Anatomical Fidelity": "Anatomical Portraiture",
-        "Emotional Expression": "Emotional Expression",
-        "Style Control": "Style Control",
-    },
-    "Alignment": {
-        "Quantity": "Attributes", "Facial Expression": "Attributes",
-        "Material Properties": "Attributes", "Color": "Attributes",
-        "Shape": "Attributes", "Size": "Attributes",
-        "Contact Interaction": "Actions", "Non-contact Interaction": "Actions",
-        "Full-body Action": "Actions",
-        "2D Space": "Layout", "3D Space": "Layout",
-        "Composition Relationship": "Relations", "Difference/Similarity": "Relations",
-        "Containment": "Relations",
-        "Real-world Scene": "Scene", "Virtual Scene": "Scene",
-    },
-    "Real-world Fidelity": {
-        "Social Bias": "Fairness", "Cultural Fairness": "Fairness",
-        "Safety & Compliance": "Safety & Compliance",
-        "Animals": "World Knowledge", "Objects": "World Knowledge",
-        "Information Visualization": "World Knowledge",
-        "Temporal Characteristics": "World Knowledge",
-        "Cultural Elements": "World Knowledge",
-    },
-    "Creative Generation": {
-        "Imagination": "Imagination",
-        "Feature Matching": "Feature Matching",
-        "Logical Resolution": "Logical Resolution",
-        "Text Accuracy": "Text Rendering", "Text Layout": "Text Rendering",
-        "Font": "Text Rendering", "Cross-lingual Generation": "Text Rendering",
-        "Graphic Design": "Design Applications", "Product Design": "Design Applications",
-        "Spatial Design": "Design Applications", "Fashion Styling": "Design Applications",
-        "Game Design": "Design Applications", "Art Design": "Design Applications",
-        "Cinematic Style": "Visual Storytelling", "Camera / Lens Style": "Visual Storytelling",
-        "Storyboard Creation": "Visual Storytelling", "Shot Sizes": "Visual Storytelling",
-        "Composition": "Visual Storytelling", "Angles": "Visual Storytelling",
-        "Comic Creation": "Visual Storytelling",
-    },
-}
 
 L3_RENAME = {
     "Creative Generation": {"Feature Mapping": "Feature Matching"},
@@ -150,7 +91,7 @@ def fix_score_json(score_json, l1_dim):
     if not score_json:
         return score_json
 
-    mapping = CHECKLIST_L3_TO_L2.get(l1_dim, {})
+    mapping = L3_TO_L2.get(l1_dim, {})
     rename = L3_RENAME.get(l1_dim, {})
 
     first_val = next(iter(score_json.values()), None)
@@ -184,4 +125,4 @@ def aggregate_total_score(dim_results):
         r["level1_score"] for r in dim_results.values()
         if r is not None and r.get("level1_score") is not None
     ]
-    return _mean_non_none(level1_scores)
+    return mean_non_none(level1_scores)

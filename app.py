@@ -16,11 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 import gradio as gr
 import spaces
 
-from qwen_image_bench.examples import (
-    EXAMPLE_JSON,
-    EXAMPLE_OUTPUT,
-    EXAMPLE_PROMPT,
-)
+
 from qwen_image_bench.judge import (
     CHARS_PER_TOKEN,
     DEFAULT_PRESET,
@@ -30,32 +26,31 @@ from qwen_image_bench.judge import (
     load_judge,
     prepare_image,
 )
-from qwen_image_bench.recovery import parse_answer, split_thinking
+
 from qwen_image_bench.report import (
     DIMENSIONS,
+    RUSHED_NOTE,
     detail_rows,
     format_summary,
 )
-from qwen_image_bench.scoring import compute_dimension_score, fix_score_json
+from qwen_image_bench.scoring import (
+    compute_dimension_score,
+    extract_json_from_response,
+    fix_score_json,
+)
 
 model, processor = load_judge()
 
-# 4-bit NF4 decoding on a 27B model runs around 18 tok/s whether one sequence or
-# five are in flight, so GPU time scales with the number of batches rather than
-# the number of dimensions. Re-tune these from the startup log on the real Space.
+PROMPT_PLACEHOLDER = "e.g. A red fox curled up in fresh snow at dawn, soft golden light"
+
 DECODE_TOKENS_PER_SECOND = 18
 PREFILL_SECONDS = 12
 PREFILL_TOKENS_PER_SECOND = 400
 BASE_SECONDS = 15
 
-# spaces multiplies the requested duration by 1.5 on non-H200 nodes, and admission
-# is checked against the full request — so a padded reservation is what gets a run
-# refused, not what keeps it safe. Cap ours so even the multiplied figure stays
-# inside a plausible free allowance for the cheaper presets.
 DURATION_FACTOR_WORST_CASE = 1.5
 MAX_RESERVATION_SECONDS = 260
 
-# How much partial reasoning to show for a dimension that is still decoding.
 LIVE_TRACE_TAIL = 1200
 
 CITATION = """\
@@ -106,25 +101,19 @@ def _prompt_status(prompt, preset_name):
     return f"{used} / {cap} characters (~{int(used / CHARS_PER_TOKEN)} tokens)", False
 
 
-def _trace_markdown(thinking, raw_outputs, audits, live=None):
+def _trace_markdown(thinking, raw_outputs, dim_results, rushed, live=None):
     """Reasoning per dimension, plus the raw answer wherever parsing failed."""
     blocks = []
     for dimension, trace in thinking.items():
-        audit = audits.get(dimension)
         heading = f"### {dimension}"
-        if audit is not None and audit.forced_close:
-            heading += " — _thinking hit its budget and was closed early_"
+        if dimension in rushed:
+            heading += f" — {RUSHED_NOTE}"
         block = [heading, trace or "_No reasoning emitted._"]
-        if audit is not None and audit.status == "failed":
+        if dim_results.get(dimension) is None:
             block += [
                 "**Could not parse a score JSON from this answer:**",
                 f"```\n{raw_outputs[dimension]}\n```",
             ]
-        elif audit is not None and audit.repaired:
-            block.append(
-                "_The answer was cut off; the scores above were recovered from the "
-                "part that arrived._"
-            )
         blocks.append("\n\n".join(block))
 
     for dimension, partial in (live or {}).items():
@@ -166,14 +155,15 @@ def judge_and_render(image, prompt, dimensions, preset_name):
     dimensions = [d for d in DIMENSIONS if d in dimensions]
     image = prepare_image(image)
 
-    dim_results, fixed_jsons, raw_outputs, thinking, audits = {}, {}, {}, {}, {}
+    dim_results, fixed_jsons, raw_outputs, thinking = {}, {}, {}, {}
+    rushed = set()
 
     def snapshot(live):
         return (
-            format_summary(dim_results, dimensions, current=live, audits=audits),
-            detail_rows(dim_results, fixed_jsons, audits=audits),
+            format_summary(dim_results, dimensions, current=live, rushed=rushed),
+            detail_rows(dim_results, fixed_jsons),
             fixed_jsons,
-            _trace_markdown(thinking, raw_outputs, audits, live),
+            _trace_markdown(thinking, raw_outputs, dim_results, rushed, live),
         )
 
     yield snapshot({})
@@ -184,57 +174,18 @@ def judge_and_render(image, prompt, dimensions, preset_name):
                 continue
             thinking[dimension] = trace
             raw_outputs[dimension] = answer
+            if forced_close:
+                rushed.add(dimension)
 
-            fixed, audit = parse_answer(
-                answer, dimension, fix_score_json, forced_close=forced_close
-            )
-            audits[dimension] = audit
-            if fixed is None:
+            # Same parse as the reference scorer: a malformed answer is dropped, not repaired.
+            score_json = extract_json_from_response(answer)
+            if score_json is None:
                 dim_results[dimension] = None
             else:
-                fixed_jsons[dimension] = fixed
-                dim_results[dimension] = compute_dimension_score(fixed)
+                fixed_jsons[dimension] = fix_score_json(score_json, dimension)
+                dim_results[dimension] = compute_dimension_score(fixed_jsons[dimension])
 
         yield snapshot(live)
-
-
-_example_thinking, _example_answer = split_thinking(EXAMPLE_OUTPUT)
-EXAMPLE_WALKTHROUGH = f"""\
-**1. Prompt**
-
-> {EXAMPLE_PROMPT}
-
-**2. Judge's reasoning**
-
-```
-<think>
-{_example_thinking[:600]}…
-</think>
-```
-
-**3. End JSON with scores across dimensions**
-
-```json
-{json.dumps(EXAMPLE_JSON, indent=2)[:300]}…
-```
-"""
-
-CITATION = f"""
-Citation\n
-If you find this model useful, please cite our paper:\n
-
-@misc{{li2026qwenimagebenchgenerationcreationtexttoimage,\n
-      title={{Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation}},\n 
-      author={{Niantong Li and Guangzheng Hu and Weixu Qiao and Ying Ba and Qichen Hong and Shijun Shen and Jinlin Wang and Fan Zhou and Jianye Kang and Xin Shang and Ziyi He and Wei Wang and Dalin Li and Jiahao Li and Jie Zhang and Kaiyuan Gao and Kun Yan and Lihan Jiang and Ningyuan Tang and Shengming Yin and Tianhe Wu and Xiao Xu and Xiaoyue Chen and Yuxiang Chen and Yan Shu and Yanran Zhang and Yilei Chen and Yixian Xu and Zekai Zhang and Zhendong Wang and Zihao Liu and Zikai Zhou and Hongzhu Shi and Yi Wang and Bing Zhao and Hu Wei and Lin Qu and Chenfei Wu}},\n
-      year={{2026}},\n
-      eprint={{2605.28091}},\n
-      archivePrefix={{arXiv}},\n
-      primaryClass={{cs.CV}},\n
-      url={{https://arxiv.org/abs/2605.28091}}, \n
-}}\n
-License\n
-This project is licensed under the Apache License 2.0.
-"""
 
 with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
     gr.Markdown(
@@ -244,26 +195,22 @@ with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
         Scores text-to-image output across the benchmark's five dimensions
         using [Qwen/Qwen-Image-Bench](https://huggingface.co/Qwen/Qwen-Image-Bench).
 
-        Each criterion is graded **0 (Fail), 1 (Pass), 2 (Excel)** or N/A. Scores are reported alongside the paper's 0/60/100 equivalent.
-        4 bit quantization is implemented to accomodate for ZeroGPU.
+        Each criterion is graded **0 (Fail), 1 (Pass), 2 (Excel)**.
         """
     )
-
-    with gr.Accordion("Example output", open=False):
-        gr.Markdown(EXAMPLE_WALKTHROUGH)
 
     with gr.Row():
         with gr.Column(scale=2):
             image_input = gr.Image(type="pil", label="Generated image", height=340)
             prompt_input = gr.Textbox(
                 label="Prompt used to generate the image",
-                placeholder=EXAMPLE_PROMPT,
+                placeholder=PROMPT_PLACEHOLDER,
                 lines=3,
                 max_length=PRESETS[DEFAULT_PRESET].prompt_chars,
             )
 
             prompt_counter = gr.Markdown(
-                _prompt_status(EXAMPLE_PROMPT, DEFAULT_PRESET)[0],
+                _prompt_status("", DEFAULT_PRESET)[0],
                 label="Character count"
             )
 

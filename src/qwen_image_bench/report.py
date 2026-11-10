@@ -1,27 +1,21 @@
-"""Turning judge output into the tables the UI renders.
-
-Kept free of torch/transformers imports so it can be exercised without a GPU.
-
-Scores here are on the raw 0-2 verdict scale, because SCORE_MAP is the identity
-(see scoring.py). That is deliberately *not* a rescale of the paper's 0/60/100
-numbers -- 0/60/100 is non-linear, so verdicts {1, 2} average to 1.5 here but to 80
-upstream. ``paper_scale_total`` recovers the comparable figure.
+"""
+Turning judge output into the tables the UI renders.
 """
 
 from .checklists import DIM_TO_CHECKLIST
-from .scoring import SCORE_MAP, aggregate_total_score
+from .scoring import PAPER_SCALE, aggregate_total_score
 
 DIMENSIONS = list(DIM_TO_CHECKLIST)
 
-VERDICTS = {0: "0 · Fail", 1: "1 · Pass", 2: "2 · Excel"}
-
 MAX_SCORE = 2
 
-# Upstream's mapping, kept here rather than in the vendored scorer so the primary
-# scale stays the one the rest of the app agrees on.
-PAPER_SCALE = {0.0: 0.0, 1.0: 60.0, 2.0: 100.0}
+VERDICTS = {0: "0; Fail", 1: "1; Pass", 2: "2; Excel"}
 
-STATUS_MARKS = {"partial": "⚠", "failed": "✕"}
+RUSHED_NOTE = "! Rushed: thinking hit the budget"
+RUSHED_FOOTNOTE = (
+    "> **! Rushed:** the preset's thinking budget ran out, so the answer was forced "
+    "early. Rushed scores still count toward the total."
+)
 
 
 def _mean(values):
@@ -30,14 +24,9 @@ def _mean(values):
 
 
 def paper_scale_total(dim_results):
-    """The same verdicts aggregated on upstream's 0/60/100 scale, for comparability.
-
-    Works off ``level3_scores``, which hold the raw verdicts while SCORE_MAP is the
-    identity. Returns None if that assumption ever stops holding, rather than quietly
-    reporting a number computed twice over.
     """
-    if SCORE_MAP != {0: 0.0, 1: 1.0, 2: 2.0}:
-        return None
+    Compute using original PAPER SCALE.
+    """
 
     level1 = []
     for result in dim_results.values():
@@ -51,7 +40,7 @@ def paper_scale_total(dim_results):
     return _mean(level1)
 
 
-def format_summary(dim_results, requested, current=(), audits=None):
+def format_summary(dim_results, requested, current=(), rushed=()):
     """Markdown summary: total score plus a per-dimension table.
 
     ``dim_results`` maps a level-1 dimension to the output of
@@ -59,10 +48,9 @@ def format_summary(dim_results, requested, current=(), audits=None):
     ``requested`` is every dimension this run will judge, in canonical order, so
     the table keeps its shape while the batch decodes. ``current`` names the
     dimensions being generated right now — a whole batch of them, normally.
-    ``audits`` maps a dimension to its DimensionAudit, so a recovered or incomplete
-    answer is labelled rather than passed off as a clean one.
+    ``rushed`` names dimensions whose thinking was cut off by the budget. They are
+    labelled and still counted in the total.
     """
-    audits = audits or {}
     scored = {d: r for d, r in dim_results.items() if r and r["level1_score"] is not None}
     total = aggregate_total_score(scored) if scored else None
     done = len(dim_results)
@@ -92,33 +80,19 @@ def format_summary(dim_results, requested, current=(), audits=None):
         else:
             value = f"{result['level1_score']:.2f}"
 
-        audit = audits.get(dimension)
-        note = ""
-        if audit is not None and audit.status != "ok":
-            note = f"{STATUS_MARKS.get(audit.status, '')} {audit.note()}".strip()
+        note = RUSHED_NOTE if dimension in rushed else ""
         lines.append(f"| {dimension} | {value} | {note} |")
 
     if done < len(requested):
         lines += ["", f"_Judging… {done}/{len(requested)} dimensions complete._"]
 
-    if any(a.status == "partial" for a in audits.values()):
-        lines += [
-            "",
-            "> ⚠ A partial dimension is averaged over the criteria that survived, not "
-            "over the whole checklist. Missing criteria are absent from the mean, not "
-            "counted as zero.",
-        ]
+    if any(dimension in rushed for dimension in dim_results):
+        lines += ["", RUSHED_FOOTNOTE]
     return "\n".join(lines)
 
 
-def detail_rows(dim_results, fixed_jsons, audits=None):
-    """Flatten to (L1, L2, L3, verdict) rows, including criteria the model skipped.
-
-    On the 0-2 scale the mapped score equals the raw verdict, so the separate score
-    column is gone. Missing criteria are listed explicitly — an absent row is the one
-    thing a reader cannot notice on their own.
-    """
-    audits = audits or {}
+def detail_rows(dim_results, fixed_jsons):
+    """Flatten to (L1, L2, L3, verdict) rows."""
     rows = []
     for dimension, result in dim_results.items():
         if result is None:
@@ -129,8 +103,4 @@ def detail_rows(dim_results, fixed_jsons, audits=None):
                 entry = fixed.get(level2, {}).get(level3)
                 raw = entry.get("score") if isinstance(entry, dict) else entry
                 rows.append([dimension, level2, level3, VERDICTS.get(raw, str(raw))])
-
-        audit = audits.get(dimension)
-        for level3 in audit.missing if audit else []:
-            rows.append([dimension, "—", level3, "— not answered —"])
     return rows
