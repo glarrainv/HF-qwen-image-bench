@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use this Space, please cite it as below, together with the Qwen-Image-Bench paper."
+title: "Qwen-Image-Bench Judge: An Interactive Space for the Q-Judger Model"
+type: software
+authors:
+  - family-names: Larrain
+    given-names: G.
+license: Apache-2.0
+url: "https://huggingface.co/spaces/glarr/qwen-image-bench-classification"
+repository-code: "https://github.com/glarrainv/qwen-image-bench"
+date-released: 2026-11-09
+keywords:
+  - text-to-image
+  - evaluation
+  - judge-model
+  - benchmark
+references:
+  - type: article
+    title: "Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation"
+    authors:
+      - family-names: Li
+        given-names: Niantong
+      - family-names: Hu
+        given-names: Guangzheng
+      - family-names: Qiao
+        given-names: Weixu
+      - family-names: Ba
+        given-names: Ying
+      - name: "others"
+    year: 2026
+    url: "https://arxiv.org/abs/2605.28091"
+    identifiers:
+      - type: other
+        value: "arXiv:2605.28091"

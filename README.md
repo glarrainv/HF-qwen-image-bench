@@ -102,7 +102,26 @@ uv sync
 uv run python app.py
 ```
 
-## Credits
+## Citation
+
+If this Space supports your work, please cite it together with the original paper
+(machine-readable metadata is in [`CITATION.cff`](CITATION.cff)):
+
+```bibtex
+@software{larrain2026qwenimagebenchjudge,
+  author  = {Larrain, G.},
+  title   = {Qwen-Image-Bench Judge: An Interactive Space for the Q-Judger Model},
+  year    = {2026},
+  url     = {https://huggingface.co/spaces/glarr/qwen-image-bench-classification},
+  license = {Apache-2.0},
+  note    = {Adapted from QwenLM/Qwen-Image-Bench}
+}
+```
+
+## License & credits
+
+© 2026 G. Larrain. Released under the [Apache License 2.0](LICENSE); attribution and a
+summary of modifications are in [`NOTICE`](NOTICE).
 
 This space is an adaptation of:
 [QwenLM/Qwen-Image-Bench](https://github.com/QwenLM/Qwen-Image-Bench)

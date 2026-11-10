@@ -1,0 +1,16 @@
+Qwen-Image-Bench Judge (Hugging Face Space)
+Copyright 2026 G. Larrain
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+This product includes software adapted from Qwen-Image-Bench
+(https://github.com/QwenLM/Qwen-Image-Bench), developed by the Qwen team.
+The judge model weights (Qwen/Qwen-Image-Bench) are not redistributed here
+and remain subject to their own license.
+
+Modifications made in this product:
+  - Judge model loaded in 4-bit NF4 quantization for ZeroGPU hardware.
+  - Fixed thinking-budget presets (Fast, Balanced, Fidelity).
+  - Selectable evaluation dimensions.
+  - Gradio interface with streamed reasoning and score reporting.

@@ -1,12 +1,25 @@
+# Copyright 2026 G. Larrain
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Gradio Space for Qwen/Qwen-Image-Bench (Q-Judger).
 
 Simplifies use of the Qwen-Image-Bench judge model taking a single prompt and image and outputting scores.
-
+Adapted from QwenLM/Qwen-Image-Bench; see NOTICE for attribution.
 """
 
-import json
 import math
 import sys
+import time
 from pathlib import Path
 
 # The Space installs dependencies from requirements.txt and does not install
@@ -21,22 +34,29 @@ from qwen_image_bench.judge import (
     CHARS_PER_TOKEN,
     DEFAULT_PRESET,
     PRESETS,
+    REFERENCE_MAX_NEW_TOKENS,
     batch_size_for,
     judge_dimensions,
     load_judge,
     prepare_image,
 )
 
-from qwen_image_bench.report import (
-    DIMENSIONS,
-    RUSHED_NOTE,
-    detail_rows,
-    format_summary,
-)
+from qwen_image_bench.report import DIMENSIONS
 from qwen_image_bench.scoring import (
     compute_dimension_score,
     extract_json_from_response,
     fix_score_json,
+)
+from qwen_image_bench.ui import (
+    CSS,
+    SPACE_URL,
+    breakdown_html,
+    fmt_duration,
+    footer_html,
+    header_html,
+    reasoning_html,
+    scores_html,
+    status_html,
 )
 
 model, processor = load_judge()
@@ -51,22 +71,44 @@ BASE_SECONDS = 15
 DURATION_FACTOR_WORST_CASE = 1.5
 MAX_RESERVATION_SECONDS = 260
 
-LIVE_TRACE_TAIL = 1200
+SPACE_BIBTEX = f"""\
+@software{{larrain2026qwenimagebenchjudge,
+  author  = {{Larrain, G.}},
+  title   = {{Qwen-Image-Bench Judge: An Interactive Space for the Q-Judger Model}},
+  year    = {{2026}},
+  url     = {{{SPACE_URL}}},
+  license = {{Apache-2.0}},
+  note    = {{Adapted from QwenLM/Qwen-Image-Bench}}
+}}"""
 
-CITATION = """\
-**Citation:** [Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation](https://arxiv.org/abs/2605.28091)
-```bibtex
+PAPER_BIBTEX = """\
 @misc{li2026qwenimagebenchgenerationcreationtexttoimage,
-      title={Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation},
-      author={Niantong Li and Guangzheng Hu and Weixu Qiao and Ying Ba and others},
-      year={2026},
-      eprint={2605.28091},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2605.28091},
-}
-```
-"""
+  title         = {Qwen-Image-Bench: From Generation to Creation in Text-to-Image Evaluation},
+  author        = {Niantong Li and Guangzheng Hu and Weixu Qiao and Ying Ba and others},
+  year          = {2026},
+  eprint        = {2605.28091},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2605.28091}
+}"""
+
+THEME = gr.themes.Base(
+    primary_hue="indigo",
+    neutral_hue="slate",
+    radius_size="md",
+    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
+    font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "ui-monospace", "monospace"],
+)
+
+
+def _preset_info():
+    parts = []
+    for name, preset in PRESETS.items():
+        if preset.think is None:
+            parts.append(f"{name}: uncapped, matches upstream ({REFERENCE_MAX_NEW_TOKENS:,} tokens)")
+        else:
+            parts.append(f"{name}: {preset.think:,} thinking tokens")
+    return " · ".join(parts) + ". Fast is best for free-tier GPU quota."
 
 
 def estimate_duration(image, prompt, dimensions, preset_name, *args, **kwargs):
@@ -101,25 +143,18 @@ def _prompt_status(prompt, preset_name):
     return f"{used} / {cap} characters (~{int(used / CHARS_PER_TOKEN)} tokens)", False
 
 
-def _trace_markdown(thinking, raw_outputs, dim_results, rushed, live=None):
-    """Reasoning per dimension, plus the raw answer wherever parsing failed."""
-    blocks = []
-    for dimension, trace in thinking.items():
-        heading = f"### {dimension}"
-        if dimension in rushed:
-            heading += f" — {RUSHED_NOTE}"
-        block = [heading, trace or "_No reasoning emitted._"]
-        if dim_results.get(dimension) is None:
-            block += [
-                "**Could not parse a score JSON from this answer:**",
-                f"```\n{raw_outputs[dimension]}\n```",
-            ]
-        blocks.append("\n\n".join(block))
+def _dimensions_label(dimensions):
+    return f"Evaluation dimensions · {len(dimensions or [])} of {len(DIMENSIONS)} selected"
 
-    for dimension, partial in (live or {}).items():
-        tail = (partial or "").strip()[-LIVE_TRACE_TAIL:]
-        blocks.append("\n\n".join([f"### {dimension} — thinking…", tail or "_Starting…_"]))
-    return "\n\n".join(blocks)
+
+def _estimate_text(prompt, dimensions, preset_name):
+    if not dimensions:
+        return "Select at least one dimension to judge."
+    seconds = estimate_duration(None, prompt, dimensions, preset_name)
+    return (
+        f"Reserves up to **{fmt_duration(seconds)}** of GPU time. "
+        "Results stream in as the judge reasons."
+    )
 
 
 @spaces.GPU(duration=estimate_duration)
@@ -157,16 +192,26 @@ def judge_and_render(image, prompt, dimensions, preset_name):
 
     dim_results, fixed_jsons, raw_outputs, thinking = {}, {}, {}, {}
     rushed = set()
+    started = time.monotonic()
 
-    def snapshot(live):
+    def snapshot(live, state):
+        current = [d for d in dimensions if d in live]
         return (
-            format_summary(dim_results, dimensions, current=live, rushed=rushed),
-            detail_rows(dim_results, fixed_jsons),
+            status_html(
+                state,
+                done=len(dim_results),
+                total=len(dimensions),
+                elapsed=time.monotonic() - started,
+                current=current,
+            ),
+            scores_html(dim_results, dimensions, current=current, rushed=rushed),
+            breakdown_html(dim_results, fixed_jsons),
             fixed_jsons,
-            _trace_markdown(thinking, raw_outputs, dim_results, rushed, live),
+            reasoning_html(thinking, raw_outputs, dim_results, rushed, live),
         )
 
-    yield snapshot({})
+    # Shown while ZeroGPU allocates a device: this is the longest silent stretch.
+    yield snapshot({}, "queued")
 
     for finished, live in run_judge(image, prompt, dimensions, preset_name):
         for dimension, (trace, answer, forced_close) in finished.items():
@@ -185,83 +230,154 @@ def judge_and_render(image, prompt, dimensions, preset_name):
                 fixed_jsons[dimension] = fix_score_json(score_json, dimension)
                 dim_results[dimension] = compute_dimension_score(fixed_jsons[dimension])
 
-        yield snapshot(live)
+        yield snapshot(live, "running")
 
-with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
-    gr.Markdown(
-        f"""
-        # Qwen-Image-Bench — Q-Judger Space
+    yield snapshot({}, "done")
 
-        Scores text-to-image output across the benchmark's five dimensions
-        using [Qwen/Qwen-Image-Bench](https://huggingface.co/Qwen/Qwen-Image-Bench).
 
-        Each criterion is graded **0 (Fail), 1 (Pass), 2 (Excel)**.
-        """
+# --- control state -----------------------------------------------------------------
+
+
+def on_prompt_change(prompt, preset_name, dimensions):
+    text, over = _prompt_status(prompt, preset_name)
+    return (
+        gr.update(value=text),
+        gr.update(interactive=not over),
+        gr.update(value=_estimate_text(prompt, dimensions, preset_name)),
     )
 
-    with gr.Row():
-        with gr.Column(scale=2):
-            image_input = gr.Image(type="pil", label="Generated image", height=340)
+
+def on_preset_change(prompt, preset_name, dimensions):
+    text, over = _prompt_status(prompt, preset_name)
+    return (
+        gr.update(max_length=PRESETS[preset_name].prompt_chars),
+        gr.update(value=text),
+        gr.update(interactive=not over),
+        gr.update(value=_estimate_text(prompt, dimensions, preset_name)),
+    )
+
+
+def lock_controls():
+    return gr.update(value="Judging…", interactive=False), gr.update(visible=True)
+
+
+def unlock_controls(prompt, preset_name):
+    _, over = _prompt_status(prompt, preset_name)
+    return gr.update(value="Judge image", interactive=not over), gr.update(visible=False)
+
+
+def stop_run(prompt, preset_name):
+    return (*unlock_controls(prompt, preset_name), status_html("stopped"))
+
+
+def clear_all():
+    return (
+        None,
+        "",
+        status_html("idle"),
+        scores_html({}, []),
+        breakdown_html({}, {}),
+        None,
+        reasoning_html({}, {}, {}, set()),
+    )
+
+
+# --- layout ------------------------------------------------------------------------
+
+with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
+    gr.HTML(header_html())
+
+    with gr.Row(equal_height=False):
+        # Inputs: everything needed for a run, top to bottom, ending in the action.
+        with gr.Column(scale=5, min_width=340):
+            gr.HTML('<div class="qib-section">Input</div>')
+            image_input = gr.Image(
+                type="pil",
+                label="Generated image",
+                height=320,
+                sources=["upload", "clipboard"],
+            )
             prompt_input = gr.Textbox(
                 label="Prompt used to generate the image",
                 placeholder=PROMPT_PLACEHOLDER,
                 lines=3,
                 max_length=PRESETS[DEFAULT_PRESET].prompt_chars,
             )
-
             prompt_counter = gr.Markdown(
-                _prompt_status("", DEFAULT_PRESET)[0],
-                label="Character count"
+                _prompt_status("", DEFAULT_PRESET)[0], elem_classes=["qib-hint", "qib-counter"]
             )
 
-
-            dimension_input = gr.CheckboxGroup(
-                choices=DIMENSIONS,
-                value=DIMENSIONS,
-                label="Evaluation dimensions",
-                info="Select dimensions present in JSON output.",
-            )
             preset_input = gr.Radio(
                 choices=list(PRESETS),
                 value=DEFAULT_PRESET,
                 label="Thinking budget",
-                info="Fast is recommended for HuggingFace free plan. On the other hand, Fidelity matches upstream's 4096 tokens.",
+                info=_preset_info(),
             )
-            run_button = gr.Button("Judge image", variant="primary")
+            with gr.Accordion(_dimensions_label(DIMENSIONS), open=False) as dimension_panel:
+                dimension_input = gr.CheckboxGroup(
+                    choices=DIMENSIONS,
+                    value=DIMENSIONS,
+                    show_label=False,
+                    info="All selected dimensions decode together, so dropping some barely shortens a run.",
+                )
 
-        with gr.Column(scale=3):
-            summary_output = gr.Markdown("Upload an image and prompt, then press **Judge image**.")
-            detail_output = gr.Dataframe(
-                headers=["Dimension", "Sub-dimension", "Criterion", "Verdict"],
-                label="Per-criterion breakdown",
-                wrap=True,
+            estimate_note = gr.Markdown(
+                _estimate_text("", DIMENSIONS, DEFAULT_PRESET), elem_classes="qib-hint"
             )
-            with gr.Accordion("Parsed scores (JSON)", open=False):
-                json_output = gr.JSON()
-            with gr.Accordion("Judge reasoning", open=False):
-                thinking_output = gr.Markdown()
-            with gr.Accordion("Citation", open=False):
-                gr.Markdown(CITATION, elem_id="citation")
+            with gr.Row():
+                run_button = gr.Button("Judge image", variant="primary", scale=3, min_width=120)
+                stop_button = gr.Button("Stop", variant="stop", scale=1, min_width=72, visible=False)
+                clear_button = gr.Button("Clear", variant="secondary", scale=1, min_width=72)
 
-    def on_prompt_change(prompt, preset_name, dimensions):
-        text, over = _prompt_status(prompt, preset_name)
-        return (
-            gr.update(value=text),
-            gr.update(interactive=not over)
-        )
+        # Results: status and headline scores stay pinned above the long-form tabs.
+        with gr.Column(scale=7, min_width=420):
+            gr.HTML('<div class="qib-section">Results</div>')
+            status_output = gr.HTML(status_html("idle"))
+            scores_output = gr.HTML(scores_html({}, []))
+            with gr.Tabs():
+                with gr.Tab("Reasoning"):
+                    reasoning_output = gr.HTML(
+                        reasoning_html({}, {}, {}, set()),
+                        max_height=620,
+                        autoscroll=True,
+                    )
+                with gr.Tab("Breakdown"):
+                    breakdown_output = gr.HTML(breakdown_html({}, {}), max_height=620)
+                with gr.Tab("JSON"):
+                    json_output = gr.JSON(label="Parsed scores (0–2 scale)")
 
-    def on_preset_change(prompt, preset_name, dimensions):
-        text, over = _prompt_status(prompt, preset_name)
-        return (
-            gr.update(max_length=PRESETS[preset_name].prompt_chars),
-            gr.update(value=text),
-            gr.update(interactive=not over)
+    with gr.Accordion("Citation & license", open=False):
+        gr.Markdown(
+            "If this Space supports your work, please cite both the Space and the "
+            "original Qwen-Image-Bench paper. The Space is released under the "
+            "Apache License 2.0; see `LICENSE` and `NOTICE` in the repository."
         )
+        with gr.Row():
+            gr.Code(SPACE_BIBTEX, label="This Space", interactive=False, wrap_lines=True)
+            gr.Code(PAPER_BIBTEX, label="Qwen-Image-Bench paper", interactive=False, wrap_lines=True)
+
+    gr.HTML(footer_html())
+
+    # --- wiring --------------------------------------------------------------------
 
     prompt_input.change(
         fn=on_prompt_change,
         inputs=[prompt_input, preset_input, dimension_input],
-        outputs=[prompt_counter, run_button],
+        outputs=[prompt_counter, run_button, estimate_note],
+        show_progress="hidden",
+    )
+    dimension_input.change(
+        fn=on_prompt_change,
+        inputs=[prompt_input, preset_input, dimension_input],
+        outputs=[prompt_counter, run_button, estimate_note],
+        show_progress="hidden",
+    )
+    dimension_input.change(
+        fn=lambda dims: gr.update(label=_dimensions_label(dims)),
+        inputs=[dimension_input],
+        outputs=[dimension_panel],
+        show_progress="hidden",
+        queue=False,
     )
 
     # A shorter cap must never silently truncate what someone already typed: the
@@ -269,14 +385,42 @@ with gr.Blocks(title="Qwen-Image-Bench Judge") as demo:
     preset_input.change(
         fn=on_preset_change,
         inputs=[prompt_input, preset_input, dimension_input],
-        outputs=[prompt_input, prompt_counter, run_button],
+        outputs=[prompt_input, prompt_counter, run_button, estimate_note],
+        show_progress="hidden",
     )
 
-    run_button.click(
+    judge_inputs = [image_input, prompt_input, dimension_input, preset_input]
+    judge_outputs = [status_output, scores_output, breakdown_output, json_output, reasoning_output]
+
+    judge_event = run_button.click(
+        fn=lock_controls, outputs=[run_button, stop_button], queue=False
+    ).then(
         fn=judge_and_render,
-        inputs=[image_input, prompt_input, dimension_input, preset_input],
-        outputs=[summary_output, detail_output, json_output, thinking_output],
+        inputs=judge_inputs,
+        outputs=judge_outputs,
+        show_progress="minimal",
+        show_progress_on=[status_output],
+    )
+    judge_event.then(
+        fn=unlock_controls,
+        inputs=[prompt_input, preset_input],
+        outputs=[run_button, stop_button],
+        queue=False,
+    )
+
+    stop_button.click(
+        fn=stop_run,
+        inputs=[prompt_input, preset_input],
+        outputs=[run_button, stop_button, status_output],
+        cancels=[judge_event],
+        queue=False,
+    )
+
+    clear_button.click(
+        fn=clear_all,
+        outputs=[image_input, prompt_input, *judge_outputs],
+        queue=False,
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(theme=THEME, css=CSS)
