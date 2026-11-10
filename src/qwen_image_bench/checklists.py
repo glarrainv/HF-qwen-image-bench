@@ -1,9 +1,15 @@
-"""Evaluation checklists and prompt templates for the Q-Judger model.
-
-Vendored verbatim from https://github.com/QwenLM/Qwen-Image-Bench (checklists.py),
-Apache-2.0. Keep in sync with upstream: the judge's score calibration depends
-on these strings being byte-identical to what the model was fine-tuned on.
 """
+Define checklist and dimension levels:
+
+L1 - L3 Checklist hierarchy:
+- Level 1: Dimension (e.g., Quality, Aesthetics, Alignment, etc.)
+- Level 2: Sub-dimension (e.g., Realism, Detail, Resolution, etc.)
+- Level 3: Criteria (e.g., Physical Logic, Material Texture, Noise, etc.)
+
+Includes system prompts and definitions from original Qwen-Image-Bench.
+"""
+from collections import defaultdict
+
 
 QUALITY_CHECKLIST = """## Realism
 - Physical Logic: Does the image adhere to real-world physical laws (e.g., gravity, reflection, shadow direction, object stability)?
@@ -133,3 +139,31 @@ Respond with a valid JSON object only (no markdown code blocks):
     "{{level3_dim}}": {{"score": "N/A"}}
   }}
 }}"""
+
+def _l3_to_l2(checklist):
+    """Convert cheklist text into a mapping from L3 to L2"""
+    mapping, level2 = {}, None
+    for line in checklist.splitlines():
+        if line.startswith("## "):
+            level2 = line[3:].strip()
+        elif line.startswith("- ") and level2:
+            mapping[line[2:].split(":", 1)[0].strip()] = level2
+    return mapping
+
+def parse_dims_by_level1(dims_en_str):
+    """
+    Parse dims_en string, group by level-1 dimension.
+    Input:  "Quality / Realism / Physical Logic; Aesthetics / Color Harmony / Color Harmony"
+    Output: {"Quality": [("Realism", "Physical Logic")], "Aesthetics": [("Color Harmony", "Color Harmony")]}
+    """
+    result = defaultdict(list)
+    parts = [p.strip() for p in dims_en_str.split(';')]
+    for p in parts:
+        levels = [l.strip() for l in p.split('/')]
+        if len(levels) >= 3:
+            result[levels[0]].append((levels[1], levels[2]))
+        elif len(levels) == 2:
+            result[levels[0]].append((levels[1], levels[1]))
+    return dict(result)
+
+L3_TO_L2 = {dim: _l3_to_l2(text) for dim, text in DIM_TO_CHECKLIST.items()}
