@@ -10,3 +10,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local no-GPU UI preview (not shipped)
+scripts/preview_ui.py

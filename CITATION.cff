@@ -1,10 +1,10 @@
 cff-version: 1.2.0
 message: "If you use this Space, please cite it as below, together with the Qwen-Image-Bench paper."
-title: "Qwen-Image-Bench Judge: An Interactive Space for the Q-Judger Model"
+title: "Qwen-Image-Bench Judge HF Space"
 type: software
 authors:
   - family-names: Larrain
-    given-names: G.
+    given-names: Gaspar
 license: Apache-2.0
 url: "https://huggingface.co/spaces/glarr/qwen-image-bench-classification"
 repository-code: "https://github.com/glarrainv/qwen-image-bench"
